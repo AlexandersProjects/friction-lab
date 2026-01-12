@@ -1,0 +1,68 @@
+# Node / front-end
+node_modules/
+dist/
+build/
+.npm/
+.cache/
+package-lock.json
+yarn.lock
+.pnpm-store/
+.env
+.env.*
+/.parcel-cache
+/.next
+/.vercel
+.vercel/
+
+# Editor configs
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# JetBrains
+/.idea
+*.iws
+
+# Python virtualenvs (if any)
+venv/
+.envvenv/
+.venv/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary files
+*.tmp
+*.swp
+*~
+
+# Build artifacts
+coverage/
+reports/
+
+# Local IDE/runtime files
+/.history/
+
+# Secrets/backups
+*.pem
+*.key
+*.crt
+credentials.json
+
+# Google Apps Script exports (if you ever export)
+*.gs
+appsscript.json
+
+# Allow checked-in files that are intentionally included
+!README.md
+
