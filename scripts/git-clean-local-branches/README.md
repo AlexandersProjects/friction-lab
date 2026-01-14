@@ -59,13 +59,16 @@ bash git-clean-local-branches.sh -f ~/projects -r -n
 
 ## How It Works
 
-1. Finds local branches whose upstream tracking shows the remote as gone (`[gone]`).
-2. Shows branch name, last commit date (ISO) and author.
-3. Marks branches older than threshold as `[STALE]`.
-4. In interactive mode, asks before deleting (unless `-y`).
-5. In non-interactive mode, `-F` is required to force-delete branches that aren't merged; otherwise they are skipped.
-6. `-n` / `--dry-run` prints what would happen and does not delete anything.
-7. `-l` enables logging; if no file is supplied the script writes to the workspace default `git-clean-local-branches.log`.
+1. **Find candidates**: Scans for local branches whose upstream tracking shows `[gone]` (remote deleted).
+2. **Show info**: Displays branch name, last commit date (ISO 8601 format), and author.
+3. **Mark stale**: Flags branches older than threshold (default 30 days) as `[STALE]`.
+4. **Safe delete first**: Tries `git branch -d` (safe delete) which only works on merged branches.
+5. **Force delete handling**:
+   - **Interactive mode**: If safe delete fails, asks per-branch whether to force-delete.
+   - **Auto mode** (`-y`): Skips unmerged branches unless `-F` is also set.
+   - **Force mode** (`-F`): Uses `git branch -D` for unmerged branches (use carefully).
+6. **Dry-run** (`-n`): Shows what would be deleted without performing any deletions.
+7. **Logging** (`-l`): Optional; writes timestamped, color-free log entries.
 
 ## Example Output
 
@@ -76,23 +79,23 @@ Looking for local branches without remote counterparts...
 
 Found branches with deleted remotes:
 
-BRANCH                         LAST COMMIT (ISO)    AUTHOR
+BRANCH                         LAST COMMIT (ISO)         AUTHOR
 --------------------------------------------------------------------------------
-feature/new-ui                 2025-11-07T14:22:03Z Jane Smith
-feature/old-task               2025-09-01T11:05:22Z John Doe             [STALE]
-bugfix/quick-fix               2025-11-01T09:15:00Z Alex Johnson
+feature/new-ui                 2025-11-07T14:22:03+00:00 Jane Smith
+feature/old-task               2025-09-01T11:05:22+00:00 John Doe             [STALE]
+bugfix/quick-fix               2025-11-01T09:15:00+00:00 Alex Johnson
 
 Total: 3 branch(es)
 Stale branches (will be excluded from deletion): 1
 
 Do you want to delete these branches? (y/N): y
 
-✓ Deleted: feature/new-ui
+✓ Deleted (safe): feature/new-ui
 ⊗ Skipped (stale): feature/old-task
-✓ Deleted: bugfix/quick-fix
+✓ Deleted (safe): bugfix/quick-fix
 
 ✓ Done! Deleted 2 branch(es)
-  Skipped 1 stale branch(es)
+  Skipped 1 branch(es)
 ```
 
 ## Logging

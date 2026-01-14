@@ -116,14 +116,14 @@ while [[ $# -gt 0 ]]; do
             echo "  -h, --help              Show this help message"
             echo ""
             echo "Examples:"
-            echo "  $0                              # Clean current repository (logs to workspace/git-clean-local-branches.log)"
+            echo "  $0                              # Clean current repository"
+            echo "  $0 -n                           # Dry-run: show what would be deleted"
+            echo "  $0 -l                           # Clean and log to workspace/git-clean-local-branches.log"
             echo "  $0 -f ~/projects                # Clean all repos in ~/projects"
-            echo "  $0 -f ~/projects -y             # Clean all repos (auto-confirm)"
-            echo "  $0 -s 60                        # Mark branches >60 days as stale"
-            echo "  $0 -x                           # Show stale branches but don't delete them"
-            echo "  $0 -s 60 -x                     # Custom threshold + exclude stale from deletion"
-            echo "  $0 -l cleanup.log               # Log all output to cleanup.log"
-            echo "  $0 -f ~/projects -l multi.log   # Multi-repo with logging"
+            echo "  $0 -f ~/projects -r -n          # Dry-run on all repos recursively"
+            echo "  $0 -f ~/projects -y -F          # Auto-confirm and force-delete unmerged"
+            echo "  $0 -s 60 -x                     # Show branches >60 days old but don't delete"
+            echo "  $0 -l cleanup.log               # Clean and log to cleanup.log"
             exit 0
             ;;
         *)
@@ -209,12 +209,17 @@ clean_repository() {
         git merge-base --is-ancestor "$(git rev-parse --verify "$branch_ref")" HEAD >/dev/null 2>&1
     }
 
+    # Initialize arrays to store branch information
+    declare -a BRANCH_NAMES=()
+    declare -a BRANCH_DATES=()
+    declare -a STALE_BRANCHES=()
+
     # Use NUL-separated output to safely handle branch names with unusual characters
     # Fields: branch_name, upstream_track (contains '[gone]' when remote is deleted), committerdate ISO8601, authorname
     # Use git's -z output to get NUL-separated records directly (don't store in a variable)
     # The for-each-ref will emit records terminated by NUL when -z is used.
     git_cmd_output_exists=true
-    if ! git for-each-ref --format='%(refname:short)%00%(upstream:track)%00%(committerdate:iso8601)%00%(authorname)%00' -- refs/heads/ -z >/dev/null 2>&1; then
+    if ! git for-each-ref -z --format='%(refname:short)%00%(upstream:track)%00%(committerdate:iso8601)%00%(authorname)%00' refs/heads/ >/dev/null 2>&1; then
         git_cmd_output_exists=false
     fi
 
@@ -228,6 +233,11 @@ clean_repository() {
         return 0
     fi
 
+    log "${YELLOW}Found branches with deleted remotes:${NC}"
+    log ""
+    log "$(printf "%-30s %-25s %-25s" "BRANCH" "LAST COMMIT (ISO)" "AUTHOR")"
+    log "--------------------------------------------------------------------------------"
+
     # Read records safely (NUL-terminated). We pass git's -z output directly to the loop.
     while IFS= read -r -d '' record; do
         # split the NUL-separated fields in record
@@ -238,23 +248,21 @@ clean_repository() {
             continue
         fi
 
-        # Skip current branch
+        # Skip current branch - don't show or count it
         if [ -n "$CURRENT_BRANCH" ] && [ "$branch" = "$CURRENT_BRANCH" ]; then
-            log "${CYAN}⊗ Skipped (current branch): $branch${NC}"
             continue
         fi
 
-        # If HEAD is detached, protect branches pointing to HEAD
+        # If HEAD is detached, protect branches pointing to HEAD - don't show or count them
         if [ "$DETACHED_HEAD" = true ] && [ -n "$HEAD_COMMIT" ]; then
             branch_commit="$(git rev-parse --verify "refs/heads/$branch" 2>/dev/null || true)"
             if [ -n "$branch_commit" ] && [ "$branch_commit" = "$HEAD_COMMIT" ]; then
-                log "${CYAN}⊗ Skipped (points at detached HEAD): $branch${NC}"
                 continue
             fi
         fi
 
         # Calculate days since last commit using commit epoch for precision
-        COMMIT_EPOCH="$(git log -1 --format=%ct -- "$branch" 2>/dev/null || echo "0")"
+        COMMIT_EPOCH="$(git log -1 --format=%ct "$branch" 2>/dev/null || echo "0")"
         if [ "$COMMIT_EPOCH" = "0" ]; then
             log "${YELLOW}⚠ Warning: Could not get commit date for branch: $branch${NC}"
             continue
@@ -279,9 +287,21 @@ clean_repository() {
 
         BRANCH_NAMES+=("$branch")
         BRANCH_DATES+=("$LAST_COMMIT_ISO")
-    done < <(git for-each-ref --format='%(refname:short)%00%(upstream:track)%00%(committerdate:iso8601)%00%(authorname)%00' -- refs/heads/ -z 2>/dev/null || true)
+    done < <(git for-each-ref -z --format='%(refname:short)%00%(upstream:track)%00%(committerdate:iso8601)%00%(authorname)%00' refs/heads/ 2>/dev/null || true)
 
     log ""
+
+    # Check if we found any candidate branches at all
+    if [ ${#BRANCH_NAMES[@]} -eq 0 ]; then
+        log "${GREEN}✓ No branches found with deleted remotes${NC}"
+        log ""
+        if [ "$MULTI_REPO_MODE" = false ]; then
+            log "All your local branches have corresponding remotes or are local-only branches."
+        fi
+        cd "$original_dir"
+        return 0
+    fi
+
     log "${YELLOW}Total: ${#BRANCH_NAMES[@]} branch(es)${NC}"
     if [ "$EXCLUDE_STALE" = true ] && [ ${#STALE_BRANCHES[@]} -gt 0 ]; then
         log "${YELLOW}Stale branches (will be excluded from deletion): ${#STALE_BRANCHES[@]}${NC}"
@@ -303,8 +323,10 @@ clean_repository() {
 
     log ""
 
-    # Ask for confirmation
-    if [ "$AUTO_YES" = false ]; then
+    # Ask for confirmation (skip in dry-run mode since we're not actually deleting)
+    if [ "$DRY_RUN" = true ]; then
+        log "${CYAN}Dry-run mode: analyzing what would be deleted...${NC}"
+    elif [ "$AUTO_YES" = false ]; then
         read -r -n 1 -p "Do you want to delete these branches? (y/N): " REPLY
         echo ""
 
@@ -457,6 +479,9 @@ if [ "$MULTI_REPO_MODE" = true ]; then
     fi
     if [ "$RECURSIVE" = true ]; then
         log "Search mode: ${YELLOW}Recursive${NC}"
+    fi
+    if [ "$DRY_RUN" = true ]; then
+        log "Dry-run: ${CYAN}ENABLED (no deletions will be performed)${NC}"
     fi
     log ""
 
