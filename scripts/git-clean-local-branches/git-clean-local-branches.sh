@@ -29,9 +29,10 @@ TARGET_FOLDER=""
 AUTO_YES=false
 EXCLUDE_STALE=false
 LOG_FILE="${WORKSPACE_ROOT}/git-clean-local-branches.log"
-LOG_ENABLED=true
+LOG_ENABLED=false
 FORCE_DELETE=false
 RECURSIVE=false
+DRY_RUN=false
 
 # Logging function - prints to terminal with colors, logs to file without colors
 log() {
@@ -77,13 +78,20 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -l|--log)
-            if [ -z "${2:-}" ] || [[ "$2" == -* ]]; then
-                printf '%b\n' "${RED}Error: --log requires a file path${NC}"
-                exit 1
+            # Enable logging. If an argument is supplied and doesn't start with '-', use it as filename;
+            # otherwise enable logging to default LOG_FILE.
+            if [ -n "${2:-}" ] && [[ "$2" != -* ]]; then
+                LOG_FILE="$2"
+                LOG_ENABLED=true
+                shift 2
+            else
+                LOG_ENABLED=true
+                shift
             fi
-            LOG_FILE="$2"
-            LOG_ENABLED=true
-            shift 2
+            ;;
+        -n|--dry-run)
+            DRY_RUN=true
+            shift
             ;;
         -F|--force-delete)
             FORCE_DELETE=true
@@ -102,7 +110,8 @@ while [[ $# -gt 0 ]]; do
             echo "  -y, --yes               Auto-confirm deletions (use with caution!)"
             echo "  -s, --stale-days DAYS   Set custom threshold for marking stale branches (default: 30)"
             echo "  -x, --exclude-stale     Exclude stale branches from deletion (show only)"
-            echo "  -l, --log FILE          Write log output to specified file (with timestamps)"
+            echo "  -l, --log [FILE]       Write log output to specified file (optional; default used when no FILE)"
+            echo "  -n, --dry-run          Show what would be deleted without deleting (safe preview)"
             echo "  -F, --force-delete      Force delete branches (-D) when necessary (use with caution)"
             echo "  -h, --help              Show this help message"
             echo ""
@@ -192,6 +201,13 @@ clean_repository() {
 
     log "Looking for local branches without remote counterparts..."
     log ""
+
+    # If dry-run is enabled, we'll determine merged status to report whether a branch would be deleted safely
+    is_branch_merged() {
+        local branch_ref="$1"
+        # Return 0 if branch tip is an ancestor of HEAD (i.e., merged into HEAD)
+        git merge-base --is-ancestor "$(git rev-parse --verify "$branch_ref")" HEAD >/dev/null 2>&1
+    }
 
     # Use NUL-separated output to safely handle branch names with unusual characters
     # Fields: branch_name, upstream_track (contains '[gone]' when remote is deleted), committerdate ISO8601, authorname
@@ -305,6 +321,8 @@ clean_repository() {
     log ""
     DELETED_COUNT=0
     SKIPPED_COUNT=0
+    WOULD_DELETE_COUNT=0
+    WOULD_FORCE_COUNT=0
 
     for branch in "${BRANCH_NAMES[@]}"; do
         # Check if this branch is stale and should be excluded
@@ -332,10 +350,30 @@ clean_repository() {
         fi
 
         # Attempt safe delete first
-        if git branch -d -- "$branch" > /dev/null 2>&1; then
-            log "${GREEN}✓ Deleted (safe): $branch${NC}"
-            ((DELETED_COUNT++))
-            continue
+        if [ "$DRY_RUN" = true ]; then
+            # Determine whether a safe delete would succeed (branch merged into HEAD)
+            if is_branch_merged "$branch"; then
+                log "${YELLOW}Would delete (safe): $branch${NC}"
+                ((WOULD_DELETE_COUNT++))
+                continue
+            else
+                # Would require force to delete
+                if [ "$FORCE_DELETE" = true ]; then
+                    log "${YELLOW}Would delete (force): $branch${NC}"
+                    ((WOULD_FORCE_COUNT++))
+                    continue
+                else
+                    log "${YELLOW}Would skip (would require force to delete): $branch${NC}"
+                    ((SKIPPED_COUNT++))
+                    continue
+                fi
+            fi
+        else
+            if git branch -d -- "$branch" > /dev/null 2>&1; then
+                log "${GREEN}✓ Deleted (safe): $branch${NC}"
+                ((DELETED_COUNT++))
+                continue
+            fi
         fi
 
         # Safe delete failed (likely not fully merged)
@@ -374,13 +412,17 @@ clean_repository() {
     done
 
     log ""
-    if [ "$DELETED_COUNT" -gt 0 ] || [ "$SKIPPED_COUNT" -gt 0 ]; then
-        log "${GREEN}✓ Done! Deleted $DELETED_COUNT branch(es)${NC}"
-        if [ "$SKIPPED_COUNT" -gt 0 ]; then
-            log "${CYAN}  Skipped $SKIPPED_COUNT branch(es)${NC}"
-        fi
+    if [ "$DRY_RUN" = true ]; then
+        log "${BLUE}Dry-run: Would have deleted ${WOULD_DELETE_COUNT} branch(es) (safe), ${WOULD_FORCE_COUNT} branch(es) (force). Skipped: ${SKIPPED_COUNT}${NC}"
     else
-        log "${BLUE}No branches were deleted${NC}"
+        if [ "$DELETED_COUNT" -gt 0 ] || [ "$SKIPPED_COUNT" -gt 0 ]; then
+            log "${GREEN}✓ Done! Deleted $DELETED_COUNT branch(es)${NC}"
+            if [ "$SKIPPED_COUNT" -gt 0 ]; then
+                log "${CYAN}  Skipped $SKIPPED_COUNT branch(es)${NC}"
+            fi
+        else
+            log "${BLUE}No branches were deleted${NC}"
+        fi
     fi
 
     cd "$original_dir"

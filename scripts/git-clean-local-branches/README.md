@@ -5,11 +5,17 @@ Clean up local git branches whose remote counterparts have been deleted.
 ## Quick Start
 
 ```bash
-# Single repo
+# Single repo (interactive)
 bash git-clean-local-branches.sh
 
-# Multiple repos
+# Single repo, dry-run (show what would be deleted)
+bash git-clean-local-branches.sh --dry-run
+
+# Multiple repos (one level deep)
 bash git-clean-local-branches.sh -f ~/projects
+
+# Multiple repos, recursive discovery
+bash git-clean-local-branches.sh -f ~/projects -r
 
 # Windows (double-click or run)
 git-clean-local-branches.bat
@@ -19,40 +25,47 @@ git-clean-local-branches.bat
 
 | Option | Description |
 |--------|-------------|
-| `-f PATH` | Run on all repos in folder |
-| `-y` | Auto-confirm (no prompts) |
-| `-s DAYS` | Stale threshold (default: 30) |
-| `-x` | Exclude stale from deletion |
-| `-l FILE` | Log to file with timestamps |
+| `-f PATH` | Run on all repos in folder (one level deep unless `-r` used) |
+| `-r` / `--recursive` | Search recursively under `PATH` for git repositories |
+| `-y` | Auto-confirm prompts (use carefully) |
+| `-s DAYS` | Stale threshold in days (default: 30) |
+| `-x` | Exclude stale branches from deletion (show only) |
+| `-l [FILE]` | Enable logging. If FILE provided, write there; otherwise write to workspace `git-clean-local-branches.log` |
+| `-n` / `--dry-run` | Show what would be deleted; do not perform any deletions |
+| `-F` / `--force-delete` | In non-interactive mode, force-delete branches that are not merged (uses `git branch -D`) |
 | `-h` | Show help |
 
 ## Common Usage
 
 ```bash
 # Preview what would be deleted (safe)
-bash git-clean-local-branches.sh -x
+bash git-clean-local-branches.sh -n
 
 # Clean with custom stale threshold
 bash git-clean-local-branches.sh -s 60
 
-# Multi-repo with logging
+# Multi-repo with logging to a specific file
 bash git-clean-local-branches.sh -f ~/projects -l cleanup.log
 
-# Automated cleanup (CI/CD)
+# Enable logging to default workspace log file
+bash git-clean-local-branches.sh -l
+
+# Automated cleanup (CI/CD) — auto-confirm but do NOT force unless -F is set
 bash git-clean-local-branches.sh -f ~/projects -y -s 90 -l cleanup.log
 
-# Windows
-git-clean-local-branches.bat -f C:\projects -x
+# Dry-run across multiple repos recursively
+bash git-clean-local-branches.sh -f ~/projects -r -n
 ```
 
 ## How It Works
 
-1. Finds local branches marked as `[gone]` (remote deleted)
-2. Shows branch name, last commit date, and author
-3. Marks branches older than threshold as `[STALE]`
-4. Confirms before deletion (unless `-y` flag)
-5. Optionally excludes stale branches from deletion (`-x` flag)
-6. Logs all operations to file if `-l` specified
+1. Finds local branches whose upstream tracking shows the remote as gone (`[gone]`).
+2. Shows branch name, last commit date (ISO) and author.
+3. Marks branches older than threshold as `[STALE]`.
+4. In interactive mode, asks before deleting (unless `-y`).
+5. In non-interactive mode, `-F` is required to force-delete branches that aren't merged; otherwise they are skipped.
+6. `-n` / `--dry-run` prints what would happen and does not delete anything.
+7. `-l` enables logging; if no file is supplied the script writes to the workspace default `git-clean-local-branches.log`.
 
 ## Example Output
 
@@ -63,11 +76,11 @@ Looking for local branches without remote counterparts...
 
 Found branches with deleted remotes:
 
-BRANCH                         LAST COMMIT          AUTHOR
+BRANCH                         LAST COMMIT (ISO)    AUTHOR
 --------------------------------------------------------------------------------
-feature/new-ui                 2 days ago           Jane Smith
-feature/old-task               3 weeks ago          John Doe             [STALE]
-bugfix/quick-fix               1 week ago           Alex Johnson
+feature/new-ui                 2025-11-07T14:22:03Z Jane Smith
+feature/old-task               2025-09-01T11:05:22Z John Doe             [STALE]
+bugfix/quick-fix               2025-11-01T09:15:00Z Alex Johnson
 
 Total: 3 branch(es)
 Stale branches (will be excluded from deletion): 1
@@ -84,26 +97,25 @@ Do you want to delete these branches? (y/N): y
 
 ## Logging
 
-Log files include timestamps and no color codes for easy parsing:
+- Logging is off by default. Use `-l` to enable logging.
+- `-l` with no file writes to the workspace default: `git-clean-local-branches.log` (script workspace root).
+- `-l <file>` writes to the provided file; the script will create parent directories when possible.
 
-```
-[2026-01-13 14:30:00] ✓ Deleted: feature/old-branch
-[2026-01-13 14:30:01] ⊗ Skipped (stale): feature/ancient
-[2026-01-13 14:30:02] ✓ Done! Deleted 5 branch(es)
-```
-
-Use date-based log files for rotation:
+Example:
 ```bash
+# Default workspace log
+bash git-clean-local-branches.sh -l
+
+# Custom logfile
 bash git-clean-local-branches.sh -f ~/projects -l cleanup-$(date +%Y%m%d).log
 ```
 
 ## Tips
 
-1. **Always run first:** `git fetch --prune` to sync remote status
-2. **Test safely:** Use `-x` flag to preview without deletion
-3. **Recover if needed:** Deleted branches can be recovered from reflog: `git reflog`
-4. **Combine flags:** `-s 60 -x -l cleanup.log` for powerful workflows
-5. **Windows users:** The `.bat` file auto-finds Git Bash
+1. Run `git fetch --prune` first to sync remote status.
+2. Use `-n` (dry-run) to preview changes without risk.
+3. `-y` auto-confirms prompts; it does not automatically force-delete unmerged branches unless you also pass `-F`.
+4. Recover deleted branches via `git reflog` if needed.
 
 ## Setup
 
@@ -117,9 +129,6 @@ export PATH="$PATH:/path/to/scripts/git-clean-local-branches"
 ```bash
 # Add to ~/.bashrc or ~/.zshrc
 alias git-clean='bash ~/path/to/git-clean-local-branches.sh'
-
-# Then use anywhere
-git-clean -f ~/projects -x
 ```
 
 **Windows PowerShell:**
@@ -133,28 +142,22 @@ function git-clean { & "C:\path\to\git-clean-local-branches.bat" $args }
 - **git-clean-local-branches.sh** - Main bash script (cross-platform)
 - **git-clean-local-branches.bat** - Windows wrapper (auto-finds Git Bash)
 
-The `.bat` wrapper makes it "just work" on Windows by auto-detecting Git Bash installation. Unix users can ignore it.
-
 ## Requirements
 
-- Git (any recent version)
+- Git (recent version)
 - Bash shell (Git Bash on Windows, native on Mac/Linux)
-- No external dependencies
 
 ## Safety
 
-✅ Only deletes **local** branches (remotes are safe)  
+✅ Only deletes local branches (remotes are safe)  
 ✅ Skips current branch automatically  
+✅ Dry-run mode (`-n`) guarantees no deletions  
 ✅ Confirmation prompt (unless `-y` used)  
-✅ Recoverable from reflog if needed  
-⚠️ Use `-y` flag carefully in automation
+✅ Logging is optional and safe  
 
-## KISS Principle
+## KISS
 
-✅ Native git commands only  
-✅ No dependencies  
-✅ Clear, readable code  
-✅ Does one thing well
+Keep it simple: native git commands only, no external deps, clear output.
 
 ---
 
