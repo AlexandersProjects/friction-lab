@@ -34,12 +34,33 @@ FORCE_DELETE=false
 RECURSIVE=false
 DRY_RUN=false
 
-# Logging function - prints to terminal with colors, logs to file without colors
+# Helper: convert Windows drive-style paths to POSIX (/c/...) for Git Bash / find
+convert_to_posix_path() {
+  local p="$1"
+  # If begins with A:\ or A:/ or a:\
+  if [[ "$p" =~ ^[A-Za-z]:[\\/].* ]]; then
+    if command -v cygpath >/dev/null 2>&1; then
+      p="$(cygpath -u "$p")"
+    else
+      # Fallback: C:/Users -> /c/Users ; normalize backslashes to slashes
+      local drive="${p:0:1}"
+      local rest="${p:2}"
+      rest="${rest//\\//}"
+      p="/${drive,,}/${rest#/}"
+    fi
+  fi
+  printf '%s' "$p"
+}
+
+# Logging function: writes to stdout and optionally to a log file (without colors)
 log() {
     local message="$1"
 
     # Print to terminal with colors (use printf to respect formatting)
     printf '%b\n' "$message"
+
+    # Flush output to ensure it appears immediately
+    sync 2>/dev/null || true
 
     # Write to log file without colors (if enabled)
     if [ "${LOG_ENABLED}" = true ]; then
@@ -57,8 +78,15 @@ log() {
 while [[ $# -gt 0 ]]; do
     case $1 in
         -f|--folder)
+            # Validate presence of the folder argument
+            if [ -z "${2:-}" ] || [[ "${2:-}" == -* ]]; then
+                printf '%s\n' "${RED}Error: --folder requires a PATH argument${NC}"
+                exit 1
+            fi
             MULTI_REPO_MODE=true
-            TARGET_FOLDER="$2"
+            TARGET_FOLDER_RAW="$2"
+            # Convert Windows-style path to POSIX for Git Bash tools (find, etc.)
+            TARGET_FOLDER="$(convert_to_posix_path "$TARGET_FOLDER_RAW")"
             shift 2
             ;;
         -y|--yes)
@@ -134,6 +162,15 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [ "${MULTI_REPO_MODE}" = true ]; then
+    # Show resolved path so Windows users can see the conversion
+    log "Resolved target folder: ${CYAN}${TARGET_FOLDER}${NC}"
+    if [ ! -d "$TARGET_FOLDER" ]; then
+        log "${RED}Error: Folder does not exist: $TARGET_FOLDER${NC}"
+        exit 1
+    fi
+fi
+
 # Initialize logging: ensure parent dir exists and file is writable (or create it)
 if [ "${LOG_ENABLED}" = true ]; then
     # Create parent directory if needed
@@ -206,7 +243,14 @@ clean_repository() {
     is_branch_merged() {
         local branch_ref="$1"
         # Return 0 if branch tip is an ancestor of HEAD (i.e., merged into HEAD)
-        git merge-base --is-ancestor "$(git rev-parse --verify "$branch_ref")" HEAD >/dev/null 2>&1
+        # Use || true to prevent errexit from stopping execution
+        local commit_sha
+        commit_sha=$(git rev-parse --verify "$branch_ref" 2>/dev/null || echo "")
+        if [ -z "$commit_sha" ]; then
+            return 1
+        fi
+        git merge-base --is-ancestor "$commit_sha" HEAD >/dev/null 2>&1 || return 1
+        return 0
     }
 
     # Initialize arrays to store branch information
@@ -491,16 +535,39 @@ if [ "$MULTI_REPO_MODE" = true ]; then
 
     if [ "$RECURSIVE" = true ]; then
         # Find .git directories recursively and take their parent folder as repo root
+        log "${CYAN}Searching for git repositories in: ${TARGET_FOLDER}${NC}"
+
+        # Count repos first to provide feedback
+        git_dir_count=$(find "$TARGET_FOLDER" -type d -name .git 2>/dev/null | wc -l || echo "0")
+        log "${CYAN}Found ${git_dir_count} git repositor(ies) to process...${NC}"
+        log ""
+
         while IFS= read -r -d $'\0' gitdir; do
+            [ -z "$gitdir" ] && continue
             dir="$(dirname "$gitdir")"
+            log "Processing repo: ${CYAN}$dir${NC}"
             ((REPO_COUNT++))
-            if clean_repository "$dir"; then
+
+            # Call clean_repository and handle errors gracefully
+            set +e  # Temporarily disable errexit for this call
+            clean_repository "$dir"
+            local repo_result=$?
+            set -e  # Re-enable errexit
+
+            if [ $repo_result -eq 0 ]; then
                 ((CLEANED_COUNT++))
+            else
+                log "${YELLOW}Warning: processing failed for: ${CYAN}$dir${NC} (exit code: $repo_result)"
             fi
-        done < <(find "$TARGET_FOLDER" -type d -name .git -print0 2>/dev/null)
+        done < <(find "$TARGET_FOLDER" -type d -name .git -print0 2>/dev/null || true)
+
+        log ""
+        log "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        log "${GREEN}Finished processing. Total repositories: ${REPO_COUNT}${NC}"
     else
         for dir in "$TARGET_FOLDER"/*; do
             if [ -d "$dir/.git" ]; then
+                log "Found repo: ${CYAN}$dir${NC}"
                 ((REPO_COUNT++))
                 if clean_repository "$dir"; then
                     ((CLEANED_COUNT++))
