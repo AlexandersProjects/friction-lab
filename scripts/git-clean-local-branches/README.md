@@ -1,123 +1,58 @@
 # Git Clean Local Branches
 
-Simple bash script to clean up local git branches whose remote counterparts have been deleted. Works on single repositories or entire folders of repositories.
+Clean up local git branches whose remote counterparts have been deleted.
 
 ## Quick Start
 
-**Windows:**
-```cmd
-git-clean-local-branches.bat
-```
-
-**Mac/Linux/Git Bash:**
 ```bash
-bash git-clean-local-branches.sh
-```
-
-## Features
-
-- 🔍 List local branches without remotes (marked as "gone")
-- 📅 Show last commit date and author
-- 🏷️ Mark stale branches (customizable threshold, default 30 days)
-- ✅ Safe deletion with confirmation prompts
-- 🚫 Skip current branch automatically
-- 🎨 Color-coded terminal output
-- 📁 Multi-repository mode (scan entire folders)
-- ⚡ Auto-confirm option for automation
-- 🔒 Exclude stale branches from deletion (view only)
-
-## Usage
-
-### Single Repository
-```bash
-# Clean current repo
+# Single repo
 bash git-clean-local-branches.sh
 
-# Exclude stale branches from deletion
-bash git-clean-local-branches.sh -x
-
-# Custom stale threshold (60 days)
-bash git-clean-local-branches.sh -s 60
-
-# Combined: 60-day threshold + exclude stale
-bash git-clean-local-branches.sh -s 60 -x
-```
-
-### Multiple Repositories
-```bash
-# Clean all repos in a folder
+# Multiple repos
 bash git-clean-local-branches.sh -f ~/projects
 
-# With auto-confirm
-bash git-clean-local-branches.sh -f ~/projects -y
-
-# Exclude stale branches across all repos
-bash git-clean-local-branches.sh -f ~/projects -x
-
-# Custom threshold for all repos
-bash git-clean-local-branches.sh -f ~/projects -s 60 -x
-```
-
-### Windows (Easy Mode)
-```cmd
-REM Windows batch wrapper - auto-finds Git Bash
+# Windows (double-click or run)
 git-clean-local-branches.bat
-
-REM Multi-repo
-git-clean-local-branches.bat -f C:\Users\YourName\projects
-
-REM Exclude stale
-git-clean-local-branches.bat -x
-
-REM All options work the same
-git-clean-local-branches.bat -f C:\projects -s 90 -x -y
 ```
 
-## Command-Line Options
+## Options
 
 | Option | Description |
 |--------|-------------|
-| `-f, --folder PATH` | Run on all git repositories in specified folder |
-| `-y, --yes` | Auto-confirm deletions (use with caution!) |
-| `-s, --stale-days DAYS` | Set custom threshold for stale branches (default: 30) |
-| `-x, --exclude-stale` | Exclude stale branches from deletion (show only) |
-| `-h, --help` | Show help message |
+| `-f PATH` | Run on all repos in folder |
+| `-y` | Auto-confirm (no prompts) |
+| `-s DAYS` | Stale threshold (default: 30) |
+| `-x` | Exclude stale from deletion |
+| `-l FILE` | Log to file with timestamps |
+| `-h` | Show help |
 
-## Common Workflows
+## Common Usage
 
-### Weekly Cleanup (Recommended)
 ```bash
-# 1. Update all remotes first
-cd ~/projects
-for dir in */; do
-  cd "$dir"
-  git fetch --prune 2>/dev/null
-  cd ..
-done
-
-# 2. Clean all repos, keeping stale branches for review
-bash git-clean-local-branches.sh -f . -x
-```
-
-### Safe Exploration
-```bash
-# See what would be deleted (stale branches excluded)
+# Preview what would be deleted (safe)
 bash git-clean-local-branches.sh -x
-# Review the list, then run without -x to actually delete
-bash git-clean-local-branches.sh
+
+# Clean with custom stale threshold
+bash git-clean-local-branches.sh -s 60
+
+# Multi-repo with logging
+bash git-clean-local-branches.sh -f ~/projects -l cleanup.log
+
+# Automated cleanup (CI/CD)
+bash git-clean-local-branches.sh -f ~/projects -y -s 90 -l cleanup.log
+
+# Windows
+git-clean-local-branches.bat -f C:\projects -x
 ```
 
-### Aggressive Cleanup
-```bash
-# 90-day threshold, auto-confirm everything
-bash git-clean-local-branches.sh -f ~/projects -s 90 -y
-```
+## How It Works
 
-### Conservative Cleanup
-```bash
-# Only show truly old branches, don't delete them
-bash git-clean-local-branches.sh -s 180 -x
-```
+1. Finds local branches marked as `[gone]` (remote deleted)
+2. Shows branch name, last commit date, and author
+3. Marks branches older than threshold as `[STALE]`
+4. Confirms before deletion (unless `-y` flag)
+5. Optionally excludes stale branches from deletion (`-x` flag)
+6. Logs all operations to file if `-l` specified
 
 ## Example Output
 
@@ -136,7 +71,6 @@ bugfix/quick-fix               1 week ago           Alex Johnson
 
 Total: 3 branch(es)
 Stale branches (will be excluded from deletion): 1
-ℹ Stale branches are shown for information only (--exclude-stale is set)
 
 Do you want to delete these branches? (y/N): y
 
@@ -144,57 +78,62 @@ Do you want to delete these branches? (y/N): y
 ⊗ Skipped (stale): feature/old-task
 ✓ Deleted: bugfix/quick-fix
 
-Done! Deleted 2 branch(es)
-Skipped 1 stale branch(es)
+✓ Done! Deleted 2 branch(es)
+  Skipped 1 stale branch(es)
 ```
 
-## Setup Tips
+## Logging
 
-### Add to PATH (Optional)
+Log files include timestamps and no color codes for easy parsing:
+
+```
+[2026-01-13 14:30:00] ✓ Deleted: feature/old-branch
+[2026-01-13 14:30:01] ⊗ Skipped (stale): feature/ancient
+[2026-01-13 14:30:02] ✓ Done! Deleted 5 branch(es)
+```
+
+Use date-based log files for rotation:
+```bash
+bash git-clean-local-branches.sh -f ~/projects -l cleanup-$(date +%Y%m%d).log
+```
+
+## Tips
+
+1. **Always run first:** `git fetch --prune` to sync remote status
+2. **Test safely:** Use `-x` flag to preview without deletion
+3. **Recover if needed:** Deleted branches can be recovered from reflog: `git reflog`
+4. **Combine flags:** `-s 60 -x -l cleanup.log` for powerful workflows
+5. **Windows users:** The `.bat` file auto-finds Git Bash
+
+## Setup
+
+**Add to PATH:**
 ```bash
 # Add to ~/.bashrc or ~/.zshrc
-export PATH="$PATH:/path/to/friction-lab/scripts/git-clean-local-branches"
-
-# Then use from anywhere
-git-clean-local-branches.sh -f ~/workspaces
+export PATH="$PATH:/path/to/scripts/git-clean-local-branches"
 ```
 
-### Create Alias (Recommended)
+**Create alias:**
 ```bash
 # Add to ~/.bashrc or ~/.zshrc
 alias git-clean='bash ~/path/to/git-clean-local-branches.sh'
 
-# Usage
+# Then use anywhere
 git-clean -f ~/projects -x
 ```
 
-### Windows PowerShell Alias
+**Windows PowerShell:**
 ```powershell
 # Add to $PROFILE
 function git-clean { & "C:\path\to\git-clean-local-branches.bat" $args }
-
-# Usage
-git-clean -f C:\projects -x
 ```
 
-## How It Works
+## Files
 
-1. **Finds branches** - Uses `git for-each-ref` to find branches with `[gone]` tracking status
-2. **Calculates age** - Computes days since last commit
-3. **Marks stale** - Flags branches older than threshold (default 30 days)
-4. **Shows info** - Displays branch name, last commit date, author, and stale status
-5. **Confirms deletion** - Asks for confirmation (unless `-y` is used)
-6. **Respects exclusions** - Skips stale branches if `-x` is set
-7. **Deletes safely** - Uses `git branch -D` to remove branches
-8. **Never touches** - Current branch or remote branches
+- **git-clean-local-branches.sh** - Main bash script (cross-platform)
+- **git-clean-local-branches.bat** - Windows wrapper (auto-finds Git Bash)
 
-## Important Notes
-
-- ✅ Only deletes **local** branches (remote branches are safe)
-- ✅ Always run `git fetch --prune` first for accurate results
-- ✅ You can recover deleted branches from reflog if needed: `git reflog`
-- ✅ Stale threshold is just a guideline - review before confirming
-- ⚠️ The `-y` flag skips ALL confirmations - use carefully!
+The `.bat` wrapper makes it "just work" on Windows by auto-detecting Git Bash installation. Unix users can ignore it.
 
 ## Requirements
 
@@ -202,47 +141,21 @@ git-clean -f C:\projects -x
 - Bash shell (Git Bash on Windows, native on Mac/Linux)
 - No external dependencies
 
-## Files
+## Safety
 
-- **git-clean-local-branches.sh** - Main bash script (cross-platform)
-- **git-clean-local-branches.bat** - Windows wrapper (auto-finds Git Bash)
-- **README.md** - This file
-
-## Why Two Scripts?
-
-This tool consists of **one main bash script** plus **one Windows helper**:
-
-1. **git-clean-local-branches.sh** (Bash)
-   - The actual implementation
-   - Works on all platforms with bash
-   - Contains all the logic
-
-2. **git-clean-local-branches.bat** (Windows Batch)
-   - Convenience wrapper for Windows
-   - Auto-detects Git Bash installation
-   - Passes all arguments to the bash script
-   - Makes it easy for Windows users (just double-click!)
-
-**Why not one unified script?**
-- Bash is not native to Windows (requires Git Bash/WSL)
-- The .bat wrapper makes it "just work" on Windows
-- Unix users can ignore the .bat file completely
-- Keeps the bash script pure and cross-platform
-- Windows users don't need to know where Git Bash is installed
-
-**Could it be one script?** 
-- Not really - you need either bash OR batch as entry point
-- A single bash script requires Windows users to manually find/run bash
-- A single batch script can't run natively on Mac/Linux
-- **This two-file approach is KISS** - simple wrapper + simple script
-
-Think of it like this: The bash script is the engine, the batch file is the key for Windows users.
+✅ Only deletes **local** branches (remotes are safe)  
+✅ Skips current branch automatically  
+✅ Confirmation prompt (unless `-y` used)  
+✅ Recoverable from reflog if needed  
+⚠️ Use `-y` flag carefully in automation
 
 ## KISS Principle
 
 ✅ Native git commands only  
 ✅ No dependencies  
 ✅ Clear, readable code  
-✅ Does one thing well  
-✅ Simple options, powerful results
+✅ Does one thing well
 
+---
+
+**Pro tip:** Run `git fetch --prune` first, then use this script to clean up stale local branches.

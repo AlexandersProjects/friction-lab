@@ -3,8 +3,6 @@
 # Git Clean Local Branches
 # Finds and removes local branches that no longer have remote counterparts
 
-set -e
-
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -20,6 +18,24 @@ MULTI_REPO_MODE=false
 TARGET_FOLDER=""
 AUTO_YES=false
 EXCLUDE_STALE=false
+LOG_FILE=""
+LOG_ENABLED=false
+
+# Logging function - prints to terminal with colors, logs to file without colors
+log() {
+    local message="$1"
+
+    # Print to terminal with colors
+    echo -e "$message"
+
+    # Write to log file without colors (if enabled)
+    if [ "$LOG_ENABLED" = true ]; then
+        local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+        local clean_message=$(echo -e "$message" | sed 's/\x1b\[[0-9;]*m//g')
+        echo "[$timestamp] $clean_message" >> "$LOG_FILE"
+    fi
+}
+
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -45,6 +61,15 @@ while [[ $# -gt 0 ]]; do
             EXCLUDE_STALE=true
             shift
             ;;
+        -l|--log)
+            if [ -z "${2:-}" ] || [[ "$2" == -* ]]; then
+                echo -e "${RED}Error: --log requires a file path${NC}"
+                exit 1
+            fi
+            LOG_FILE="$2"
+            LOG_ENABLED=true
+            shift 2
+            ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -53,6 +78,7 @@ while [[ $# -gt 0 ]]; do
             echo "  -y, --yes               Auto-confirm deletions (use with caution!)"
             echo "  -s, --stale-days DAYS   Set custom threshold for marking stale branches (default: 30)"
             echo "  -x, --exclude-stale     Exclude stale branches from deletion (show only)"
+            echo "  -l, --log FILE          Write log output to specified file (with timestamps)"
             echo "  -h, --help              Show this help message"
             echo ""
             echo "Examples:"
@@ -62,26 +88,40 @@ while [[ $# -gt 0 ]]; do
             echo "  $0 -s 60                        # Mark branches >60 days as stale"
             echo "  $0 -x                           # Show stale branches but don't delete them"
             echo "  $0 -s 60 -x                     # Custom threshold + exclude stale from deletion"
+            echo "  $0 -l cleanup.log               # Log all output to cleanup.log"
+            echo "  $0 -f ~/projects -l multi.log   # Multi-repo with logging"
             exit 0
             ;;
         *)
-            echo -e "${RED}Unknown option: $1${NC}"
-            echo "Use -h or --help for usage information"
+            log "${RED}Unknown option: $1${NC}"
+            log "Use -h or --help for usage information"
             exit 1
             ;;
     esac
 done
 
+# Initialize logging if enabled
+if [ "$LOG_ENABLED" = true ]; then
+    # Create log file or append if it exists
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] ==== Git Clean Local Branches Log Started ====" >> "$LOG_FILE"
+fi
+
 # Function to clean branches in a single repository
 clean_repository() {
     local repo_path="$1"
     local repo_name=$(basename "$repo_path")
+    local original_dir=$(pwd)
 
-    cd "$repo_path"
+    cd "$repo_path" || {
+        log "${RED}Error: Cannot access directory: $repo_path${NC}"
+        return 1
+    }
 
     # Check if we're in a git repository
     if ! git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
-        echo -e "${RED}Error: Not a git repository: $repo_path${NC}"
+        log "${RED}Error: Not a git repository: $repo_path${NC}"
+        cd "$original_dir"
         return 1
     fi
 
@@ -89,32 +129,37 @@ clean_repository() {
     CURRENT_BRANCH=$(git branch --show-current)
 
     if [ "$MULTI_REPO_MODE" = true ]; then
-        echo -e "\n${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "${MAGENTA}Repository: $repo_name${NC}"
-        echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        log ""
+        log "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        log "${MAGENTA}Repository: $repo_name${NC}"
+        log "${CYAN}Path: $repo_path${NC}"
+        log "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     else
-        echo -e "${BLUE}=== Git Clean Local Branches ===${NC}\n"
+        log "${BLUE}=== Git Clean Local Branches ===${NC}"
+        log ""
     fi
 
-    echo "Looking for local branches without remote counterparts..."
-    echo ""
+    log "Looking for local branches without remote counterparts..."
+    log ""
 
     # Find branches with deleted remotes (marked as 'gone')
     BRANCHES=$(git for-each-ref --format='%(refname:short)|%(upstream:track)|%(committerdate:relative)|%(authorname)' refs/heads/ | grep '\[gone\]' || true)
 
     if [ -z "$BRANCHES" ]; then
-        echo -e "${GREEN}✓ No branches found with deleted remotes${NC}"
-        echo ""
+        log "${GREEN}✓ No branches found with deleted remotes${NC}"
+        log ""
         if [ "$MULTI_REPO_MODE" = false ]; then
-            echo "All your local branches have corresponding remotes or are local-only branches."
+            log "All your local branches have corresponding remotes or are local-only branches."
         fi
+        cd "$original_dir"
         return 0
     fi
 
     # Parse and display branches
-    echo -e "${YELLOW}Found branches with deleted remotes:${NC}\n"
-    printf "%-30s %-20s %-30s\n" "BRANCH" "LAST COMMIT" "AUTHOR"
-    echo "--------------------------------------------------------------------------------"
+    log "${YELLOW}Found branches with deleted remotes:${NC}"
+    log ""
+    log "$(printf "%-30s %-20s %-30s" "BRANCH" "LAST COMMIT" "AUTHOR")"
+    log "--------------------------------------------------------------------------------"
 
     declare -a BRANCH_NAMES=()
     declare -a BRANCH_DATES=()
@@ -128,6 +173,12 @@ clean_repository() {
 
         # Calculate days since last commit
         COMMIT_EPOCH=$(git log -1 --format=%ct "$branch" 2>/dev/null || echo "0")
+        if [ "$COMMIT_EPOCH" = "0" ]; then
+            # Failed to get commit date, skip this branch
+            log "${YELLOW}⚠ Warning: Could not get commit date for branch: $branch${NC}"
+            continue
+        fi
+
         CURRENT_EPOCH=$(date +%s)
         DAYS_OLD=$(( (CURRENT_EPOCH - COMMIT_EPOCH) / 86400 ))
 
@@ -140,17 +191,18 @@ clean_repository() {
             STALE_BRANCHES+=("$branch")
         fi
 
-        printf "%-30s %-20s %-30s %b\n" "$branch" "$date" "${author:0:25}" "$STALE_MARKER"
+        BRANCH_LINE=$(printf "%-30s %-20s %-30s %b" "$branch" "$date" "${author:0:25}" "$STALE_MARKER")
+        log "$BRANCH_LINE"
 
         BRANCH_NAMES+=("$branch")
         BRANCH_DATES+=("$date")
     done <<< "$BRANCHES"
 
-    echo ""
-    echo -e "${YELLOW}Total: ${#BRANCH_NAMES[@]} branch(es)${NC}"
+    log ""
+    log "${YELLOW}Total: ${#BRANCH_NAMES[@]} branch(es)${NC}"
     if [ "$EXCLUDE_STALE" = true ] && [ ${#STALE_BRANCHES[@]} -gt 0 ]; then
-        echo -e "${YELLOW}Stale branches (will be excluded from deletion): ${#STALE_BRANCHES[@]}${NC}"
-        echo -e "${CYAN}ℹ Stale branches are shown for information only (--exclude-stale is set)${NC}"
+        log "${YELLOW}Stale branches (will be excluded from deletion): ${#STALE_BRANCHES[@]}${NC}"
+        log "${CYAN}ℹ Stale branches are shown for information only (--exclude-stale is set)${NC}"
     fi
 
     # Calculate how many branches will actually be deleted
@@ -160,12 +212,13 @@ clean_repository() {
     fi
 
     if [ "$DELETABLE_COUNT" -eq 0 ]; then
-        echo ""
-        echo -e "${BLUE}No branches to delete (all are stale or excluded)${NC}"
+        log ""
+        log "${BLUE}No branches to delete (all are stale or excluded)${NC}"
+        cd "$original_dir"
         return 0
     fi
 
-    echo ""
+    log ""
 
     # Ask for confirmation
     if [ "$AUTO_YES" = false ]; then
@@ -173,15 +226,16 @@ clean_repository() {
         echo ""
 
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            echo -e "${BLUE}Cancelled. No branches deleted.${NC}"
+            log "${BLUE}Cancelled. No branches deleted.${NC}"
+            cd "$original_dir"
             return 0
         fi
     else
-        echo -e "${YELLOW}Auto-confirm enabled, deleting branches...${NC}"
+        log "${YELLOW}Auto-confirm enabled, deleting branches...${NC}"
     fi
 
     # Delete branches
-    echo ""
+    log ""
     DELETED_COUNT=0
     SKIPPED_COUNT=0
 
@@ -197,49 +251,58 @@ clean_repository() {
             done
 
             if [ "$IS_STALE_BRANCH" = true ]; then
-                echo -e "${CYAN}⊗ Skipped (stale): $branch${NC}"
+                log "${CYAN}⊗ Skipped (stale): $branch${NC}"
                 ((SKIPPED_COUNT++))
                 continue
             fi
         fi
 
         if git branch -D "$branch" > /dev/null 2>&1; then
-            echo -e "${GREEN}✓ Deleted: $branch${NC}"
+            log "${GREEN}✓ Deleted: $branch${NC}"
             ((DELETED_COUNT++))
         else
-            echo -e "${RED}✗ Failed to delete: $branch${NC}"
+            log "${RED}✗ Failed to delete: $branch${NC}"
         fi
     done
 
-    echo ""
-    echo -e "${GREEN}Done! Deleted $DELETED_COUNT branch(es)${NC}"
-    if [ "$SKIPPED_COUNT" -gt 0 ]; then
-        echo -e "${CYAN}Skipped $SKIPPED_COUNT stale branch(es)${NC}"
+    log ""
+    if [ "$DELETED_COUNT" -gt 0 ] || [ "$SKIPPED_COUNT" -gt 0 ]; then
+        log "${GREEN}✓ Done! Deleted $DELETED_COUNT branch(es)${NC}"
+        if [ "$SKIPPED_COUNT" -gt 0 ]; then
+            log "${CYAN}  Skipped $SKIPPED_COUNT stale branch(es)${NC}"
+        fi
+    else
+        log "${BLUE}No branches were deleted${NC}"
     fi
+
+    cd "$original_dir"
 }
 
 # Main execution
 if [ "$MULTI_REPO_MODE" = true ]; then
     # Multi-repository mode
     if [ -z "$TARGET_FOLDER" ] || [ ! -d "$TARGET_FOLDER" ]; then
-        echo -e "${RED}Error: Folder does not exist: $TARGET_FOLDER${NC}"
+        log "${RED}Error: Folder does not exist: $TARGET_FOLDER${NC}"
         exit 1
     fi
 
-    echo -e "${BLUE}╔════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║   Git Clean Local Branches - Multi-Repo Mode          ║${NC}"
-    echo -e "${BLUE}╚════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "Started: ${CYAN}$(date '+%Y-%m-%d %H:%M:%S')${NC}"
-    echo -e "Target folder: ${CYAN}$TARGET_FOLDER${NC}"
-    echo -e "Stale threshold: ${CYAN}$STALE_DAYS days${NC}"
+    log "${BLUE}╔════════════════════════════════════════════════════════╗${NC}"
+    log "${BLUE}║   Git Clean Local Branches - Multi-Repo Mode          ║${NC}"
+    log "${BLUE}╚════════════════════════════════════════════════════════╝${NC}"
+    log ""
+    log "Started: ${CYAN}$(date '+%Y-%m-%d %H:%M:%S')${NC}"
+    log "Target folder: ${CYAN}$TARGET_FOLDER${NC}"
+    log "Stale threshold: ${CYAN}$STALE_DAYS days${NC}"
     if [ "$EXCLUDE_STALE" = true ]; then
-        echo -e "Mode: ${CYAN}Exclude stale branches from deletion${NC}"
+        log "Mode: ${CYAN}Exclude stale branches from deletion${NC}"
     fi
     if [ "$AUTO_YES" = true ]; then
-        echo -e "Auto-confirm: ${YELLOW}ENABLED${NC}"
+        log "Auto-confirm: ${YELLOW}ENABLED${NC}"
     fi
-    echo ""
+    if [ "$LOG_ENABLED" = true ]; then
+        log "Log file: ${CYAN}$LOG_FILE${NC}"
+    fi
+    log ""
 
     # Find all git repositories in the target folder (one level deep)
     REPO_COUNT=0
@@ -254,20 +317,20 @@ if [ "$MULTI_REPO_MODE" = true ]; then
         fi
     done
 
-    echo ""
-    echo -e "${BLUE}╔════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║   Summary                                              ║${NC}"
-    echo -e "${BLUE}╚════════════════════════════════════════════════════════╝${NC}"
-    echo -e "Completed: ${CYAN}$(date '+%Y-%m-%d %H:%M:%S')${NC}"
-    echo -e "Total repositories found: ${CYAN}$REPO_COUNT${NC}"
-    echo -e "Repositories processed: ${GREEN}$CLEANED_COUNT${NC}"
+    log ""
+    log "${BLUE}╔════════════════════════════════════════════════════════╗${NC}"
+    log "${BLUE}║   Summary                                              ║${NC}"
+    log "${BLUE}╚════════════════════════════════════════════════════════╝${NC}"
+    log "Completed: ${CYAN}$(date '+%Y-%m-%d %H:%M:%S')${NC}"
+    log "Total repositories found: ${CYAN}$REPO_COUNT${NC}"
+    log "Repositories processed: ${GREEN}$CLEANED_COUNT${NC}"
 
     if [ "$REPO_COUNT" -eq 0 ]; then
-        echo ""
-        echo -e "${YELLOW}⚠ No git repositories found in the target folder${NC}"
-        echo -e "${YELLOW}  Make sure the folder contains git repositories (with .git directories)${NC}"
+        log ""
+        log "${YELLOW}⚠ No git repositories found in the target folder${NC}"
+        log "${YELLOW}  Make sure the folder contains git repositories (with .git directories)${NC}"
     fi
-    echo ""
+    log ""
 
 else
     # Single repository mode
