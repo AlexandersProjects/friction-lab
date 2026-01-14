@@ -194,16 +194,34 @@ fi
 
 # Function to clean branches in a single repository
 clean_repository() {
+#    echo "[DEBUG] >>> FUNCTION ENTERED - USING ECHO <<<" >&2
+#    printf '[DEBUG] >>> FUNCTION ENTERED - USING PRINTF <<<\n' >&2
+#
+#    log "${MAGENTA}[DEBUG] >>> FUNCTION ENTERED <<<${NC}"
+
     local repo_path="$1"
     local repo_name
-    repo_name=$(basename "$repo_path")
     local original_dir
-    original_dir=$(pwd)
+
+#    log "${CYAN}[DEBUG] Variables declared${NC}"
+
+    # These assignments use || to provide defaults if commands fail
+    repo_name="$(basename "$repo_path" 2>/dev/null || echo "unknown")"
+#    log "${CYAN}[DEBUG] repo_name assigned: $repo_name${NC}"
+
+    original_dir="$(pwd 2>/dev/null || echo "/tmp")"
+#    log "${CYAN}[DEBUG] original_dir assigned: $original_dir${NC}"
+
+#    log "${CYAN}[DEBUG] Entering clean_repository for: $repo_path${NC}"
+#    log "${CYAN}[DEBUG] Repository name: $repo_name${NC}"
+#    log "${CYAN}[DEBUG] Original directory: $original_dir${NC}"
 
     cd "$repo_path" || {
         log "${RED}Error: Cannot access directory: $repo_path${NC}"
         return 1
     }
+
+#    log "${CYAN}[DEBUG] Changed to directory successfully${NC}"
 
     # Check if we're in a git repository
     if ! git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
@@ -212,18 +230,21 @@ clean_repository() {
         return 1
     fi
 
+#    log "${CYAN}[DEBUG] Verified git repository${NC}"
+
     # Get current branch to avoid deleting it; detect detached HEAD
-    CURRENT_BRANCH=""
-    if CURRENT_BRANCH="$(git branch --show-current 2>/dev/null || true)"; then
-        :
-    fi
+    CURRENT_BRANCH="$(git branch --show-current 2>/dev/null || echo "")"
+#    log "${CYAN}[DEBUG] Current branch: '$CURRENT_BRANCH'${NC}"
+
     if [ -z "$CURRENT_BRANCH" ]; then
         DETACHED_HEAD=true
-        HEAD_COMMIT="$(git rev-parse --verify HEAD 2>/dev/null || true)"
+        HEAD_COMMIT="$(git rev-parse --verify HEAD 2>/dev/null || echo "")"
     else
         DETACHED_HEAD=false
         HEAD_COMMIT=""
     fi
+
+#    log "${CYAN}[DEBUG] Detached HEAD: $DETACHED_HEAD${NC}"
 
     if [ "$MULTI_REPO_MODE" = true ]; then
         log ""
@@ -542,24 +563,37 @@ if [ "$MULTI_REPO_MODE" = true ]; then
         log "${CYAN}Found ${git_dir_count} git repositor(ies) to process...${NC}"
         log ""
 
+        # Disable errexit for the entire loop to prevent unexpected exits
+        set +e
+
+        # Enable bash debug mode to trace execution
+#        set -x
+
         while IFS= read -r -d $'\0' gitdir; do
             [ -z "$gitdir" ] && continue
             dir="$(dirname "$gitdir")"
             log "Processing repo: ${CYAN}$dir${NC}"
+#            log "${CYAN}[DEBUG] About to call clean_repository...${NC}"
             ((REPO_COUNT++))
 
-            # Call clean_repository and handle errors gracefully
-            set +e  # Temporarily disable errexit for this call
             clean_repository "$dir"
-            local repo_result=$?
-            set -e  # Re-enable errexit
+            repo_result=$?
 
             if [ $repo_result -eq 0 ]; then
+#                log "${GREEN}[DEBUG] clean_repository returned success${NC}"
                 ((CLEANED_COUNT++))
             else
+#                log "${YELLOW}[DEBUG] clean_repository returned error: $repo_result${NC}"
                 log "${YELLOW}Warning: processing failed for: ${CYAN}$dir${NC} (exit code: $repo_result)"
             fi
+            log "${CYAN}[DEBUG] Finished processing this repo${NC}"
         done < <(find "$TARGET_FOLDER" -type d -name .git -print0 2>/dev/null || true)
+
+        # Disable bash debug mode
+#        set +x
+
+        # Re-enable errexit
+        set -e
 
         log ""
         log "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
