@@ -16,7 +16,7 @@ yarn.lock
 
 # Editor configs
 .vscode/
-.idea/
+/.idea/
 *.sublime-workspace
 *.sublime-project
 *.iml
@@ -27,7 +27,7 @@ Thumbs.db
 desktop.ini
 
 # JetBrains
-/.idea
+.idea
 *.iws
 
 # Python virtualenvs (if any)
