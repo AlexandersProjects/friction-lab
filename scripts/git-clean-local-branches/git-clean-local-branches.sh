@@ -9,6 +9,11 @@ set -o nounset
 set -o pipefail
 IFS=$'\n\t'
 
+# Ensure UTF-8 environment to avoid garbled box characters in logs on Windows
+# Try common UTF-8 locales but don't fail if they're not available
+export LC_ALL=C.UTF-8 2>/dev/null || export LC_ALL=en_US.UTF-8 2>/dev/null || true
+export LANG=C.UTF-8 2>/dev/null || export LANG=en_US.UTF-8 2>/dev/null || true
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -34,10 +39,14 @@ FORCE_DELETE=false
 RECURSIVE=false
 DRY_RUN=false
 
+# Logging level: DEBUG, INFO (default), WARN, ERROR
+# Set to DEBUG to see [DEBUG] messages. Use INFO for normal output.
+LOG_LEVEL="INFO"
+
 # Helper: convert Windows drive-style paths to POSIX (/c/...) for Git Bash / find
 convert_to_posix_path() {
   local p="$1"
-  # If begins with A:\ or A:/ or a:\
+  # If begins with A:\\ or A:/ or a:\\
   if [[ "$p" =~ ^[A-Za-z]:[\\/].* ]]; then
     if command -v cygpath >/dev/null 2>&1; then
       p="$(cygpath -u "$p")"
@@ -53,8 +62,18 @@ convert_to_posix_path() {
 }
 
 # Logging function: writes to stdout and optionally to a log file (without colors)
+# Respects LOG_LEVEL: messages containing "[DEBUG]" are ignored unless LOG_LEVEL=DEBUG
 log() {
     local message="$1"
+
+    # Strip ANSI sequences for internal detection
+    local stripped
+    stripped=$(printf '%b' "$message" | sed 's/\x1b\[[0-9;]*m//g' || printf '%s' "$message")
+
+    # Skip debug messages unless LOG_LEVEL is DEBUG
+    if [[ "$stripped" == *"[DEBUG]"* ]] && [[ "${LOG_LEVEL}" != "DEBUG" ]]; then
+        return 0
+    fi
 
     # Print to terminal with colors (use printf to respect formatting)
     printf '%b\n' "$message"
@@ -129,6 +148,15 @@ while [[ $# -gt 0 ]]; do
             RECURSIVE=true
             shift
             ;;
+        -L|--log-level)
+            if [ -n "${2:-}" ] && [[ "$2" =~ ^(DEBUG|INFO|WARN|ERROR)$ ]]; then
+                LOG_LEVEL="$2"
+                shift 2
+            else
+                printf '%b\n' "${RED}Error: --log-level requires one of: DEBUG, INFO, WARN, ERROR${NC}"
+                exit 1
+            fi
+            ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -141,6 +169,7 @@ while [[ $# -gt 0 ]]; do
             echo "  -l, --log [FILE]       Write log output to specified file (optional; default used when no FILE)"
             echo "  -n, --dry-run          Show what would be deleted without deleting (safe preview)"
             echo "  -F, --force-delete      Force delete branches (-D) when necessary (use with caution)"
+            echo "  -L, --log-level LEVEL   Set log verbosity (DEBUG, INFO, WARN, ERROR)"
             echo "  -h, --help              Show this help message"
             echo ""
             echo "Examples:"
@@ -194,34 +223,28 @@ fi
 
 # Function to clean branches in a single repository
 clean_repository() {
-#    echo "[DEBUG] >>> FUNCTION ENTERED - USING ECHO <<<" >&2
-#    printf '[DEBUG] >>> FUNCTION ENTERED - USING PRINTF <<<\n' >&2
-#
-#    log "${MAGENTA}[DEBUG] >>> FUNCTION ENTERED <<<${NC}"
 
     local repo_path="$1"
     local repo_name
     local original_dir
 
-#    log "${CYAN}[DEBUG] Variables declared${NC}"
-
-    # These assignments use || to provide defaults if commands fail
     repo_name="$(basename "$repo_path" 2>/dev/null || echo "unknown")"
-#    log "${CYAN}[DEBUG] repo_name assigned: $repo_name${NC}"
-
     original_dir="$(pwd 2>/dev/null || echo "/tmp")"
-#    log "${CYAN}[DEBUG] original_dir assigned: $original_dir${NC}"
 
-#    log "${CYAN}[DEBUG] Entering clean_repository for: $repo_path${NC}"
-#    log "${CYAN}[DEBUG] Repository name: $repo_name${NC}"
-#    log "${CYAN}[DEBUG] Original directory: $original_dir${NC}"
+    log "${MAGENTA}[DEBUG] >>> FUNCTION ENTERED <<<${NC}"
+    log "${CYAN}[DEBUG] Variables declared${NC}"
+    log "${CYAN}[DEBUG] repo_name assigned: $repo_name${NC}"
+    log "${CYAN}[DEBUG] original_dir assigned: $original_dir${NC}"
+    log "${CYAN}[DEBUG] Entering clean_repository for: $repo_path${NC}"
+    log "${CYAN}[DEBUG] Repository name: $repo_name${NC}"
+    log "${CYAN}[DEBUG] Original directory: $original_dir${NC}"
 
     cd "$repo_path" || {
         log "${RED}Error: Cannot access directory: $repo_path${NC}"
         return 1
     }
 
-#    log "${CYAN}[DEBUG] Changed to directory successfully${NC}"
+    log "${CYAN}[DEBUG] Changed to directory successfully${NC}"
 
     # Check if we're in a git repository
     if ! git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
@@ -230,11 +253,11 @@ clean_repository() {
         return 1
     fi
 
-#    log "${CYAN}[DEBUG] Verified git repository${NC}"
+    log "${CYAN}[DEBUG] Verified git repository${NC}"
 
     # Get current branch to avoid deleting it; detect detached HEAD
     CURRENT_BRANCH="$(git branch --show-current 2>/dev/null || echo "")"
-#    log "${CYAN}[DEBUG] Current branch: '$CURRENT_BRANCH'${NC}"
+    log "${CYAN}[DEBUG] Current branch: '$CURRENT_BRANCH'${NC}"
 
     if [ -z "$CURRENT_BRANCH" ]; then
         DETACHED_HEAD=true
@@ -244,7 +267,7 @@ clean_repository() {
         HEAD_COMMIT=""
     fi
 
-#    log "${CYAN}[DEBUG] Detached HEAD: $DETACHED_HEAD${NC}"
+    log "${CYAN}[DEBUG] Detached HEAD: $DETACHED_HEAD${NC}"
 
     if [ "$MULTI_REPO_MODE" = true ]; then
         log ""
@@ -573,17 +596,17 @@ if [ "$MULTI_REPO_MODE" = true ]; then
             [ -z "$gitdir" ] && continue
             dir="$(dirname "$gitdir")"
             log "Processing repo: ${CYAN}$dir${NC}"
-#            log "${CYAN}[DEBUG] About to call clean_repository...${NC}"
+            log "${CYAN}[DEBUG] About to call clean_repository...${NC}"
             ((REPO_COUNT++))
 
             clean_repository "$dir"
             repo_result=$?
 
             if [ $repo_result -eq 0 ]; then
-#                log "${GREEN}[DEBUG] clean_repository returned success${NC}"
+                log "${GREEN}[DEBUG] clean_repository returned success${NC}"
                 ((CLEANED_COUNT++))
             else
-#                log "${YELLOW}[DEBUG] clean_repository returned error: $repo_result${NC}"
+                log "${YELLOW}[DEBUG] clean_repository returned error: $repo_result${NC}"
                 log "${YELLOW}Warning: processing failed for: ${CYAN}$dir${NC} (exit code: $repo_result)"
             fi
             log "${CYAN}[DEBUG] Finished processing this repo${NC}"
